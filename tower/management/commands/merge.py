@@ -1,16 +1,16 @@
 import os
 import sys
+from optparse import make_option
 from subprocess import Popen, call, PIPE
 from tempfile import TemporaryFile
 
 from django.core.management.base import BaseCommand
-
-from manage import settings
+from django.conf import settings
 
 try:
-    domains = [settings.TEXT_DOMAIN] + settings.STANDALONE_DOMAINS
+    domains = settings.STANDALONE_DOMAINS
 except AttributeError:
-    domains = [settings.TEXT_DOMAIN, 'javascript']
+    domains = [settings.TEXT_DOMAIN]
 
 class Command(BaseCommand):
 
@@ -33,10 +33,22 @@ class Command(BaseCommand):
     matching.
 
     """
+    option_list = BaseCommand.option_list + (
+             make_option('-c', '--create',
+                    action="store_true", dest='create', default=False,
+                    help='Create locale subdirectories'),
 
+            )
     def handle(self, *args, **options):
 
         locale_dir = os.path.join(settings.ROOT, 'locale')
+
+        if options.get('create'):
+            for lang in getattr(settings, 'LANGUAGES', []):
+                d = os.path.join(locale_dir, lang.replace('-', '_'),
+                                 'LC_MESSAGES')
+                if not os.path.exists(d):
+                    os.makedirs(d)
 
         for domain in domains:
 

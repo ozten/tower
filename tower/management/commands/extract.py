@@ -1,12 +1,10 @@
 import os
 from optparse import make_option
 from subprocess import Popen
-try:
-    from manage import settings
-except:
-    from django.conf import settings
+import tempfile
 
 from django.core.management.base import BaseCommand
+from django.conf import settings
 
 from jinja2 import ext
 from babel.messages.extract import (DEFAULT_KEYWORDS, extract_from_dir,
@@ -17,10 +15,16 @@ from tower import strip_whitespace, add_context, split_context
 
 DEFAULT_DOMAIN = 'all'
 
+TEXT_DOMAIN = getattr(settings, 'TEXT_DOMAIN', 'messages')
+
+# By default, all the domains you speficy will be merged into one big
+# messages.po file.  If you want to separate a domain from the main .po file,
+# specify it in this list.  Make sure to include TEXT_DOMAIN in this list, even
+# if you have other .po files you're generating
 try:
     standalone_domains = settings.STANDALONE_DOMAINS
 except AttributeError:
-    standalone_domains = ['javascript']
+    standalone_domains = [TEXT_DOMAIN]
 
 TOWER_KEYWORDS = dict(DEFAULT_KEYWORDS)
 
@@ -124,11 +128,31 @@ class Command(BaseCommand):
         make_option('--domain', '-d', default=DEFAULT_DOMAIN, dest='domain',
                     help='The domain of the message files.  If "all" '
                          'everything will be extracted and combined into '
-                         'z-keys.pot. (default: %s).' % DEFAULT_DOMAIN),
+                         '%s.pot. (default: %%default).' % TEXT_DOMAIN),
+        make_option('--output-dir', '-o',
+                    default=os.path.join(settings.ROOT, 'locale', 'templates',
+                                         'LC_MESSAGES'),
+                    dest='outputdir',
+                    help='The directory where extracted files will be placed. '
+                         '(Default: %default)'),
+        make_option('-c', '--create',
+                    action='store_true', dest='create', default=False,
+                    help='Create output-dir if missing'),
+
             )
 
     def handle(self, *args, **options):
         domains = options.get('domain')
+        outputdir = os.path.abspath(options.get('outputdir'))
+
+        if not os.path.isdir(outputdir):
+            if not options.get('create'):
+                print ("Output directory must exist (%s) unless -c option is "
+                       "given. "
+                       "Specify one with --output-dir" % outputdir)
+                return "FAILURE\n"
+            else:
+                os.makedirs(outputdir)
 
         if domains == "all":
             domains = settings.DOMAIN_METHODS.keys()
@@ -162,17 +186,33 @@ class Command(BaseCommand):
                 raise Exception("Expected %s to exist... BAILING" % locale_dir)
 
         if len(domains) > 1:
-            print "Concatenating all domains except the standalone ones..."
+            print ("Concatenating the non-standalone domains into %s.pot" %
+                   TEXT_DOMAIN)
+
             pot_files = []
             for i in [x for x in domains if x not in standalone_domains]:
-                pot_files.append(os.path.join(root, 'locale', 'z-%s.pot' % i))
-            z_keys = open(os.path.join(root, 'locale', 'z-keys.pot'), 'w+t')
-            z_keys.truncate()
+                pot_files.append(os.path.join(outputdir, '%s.pot' % i))
+
+            final_out = os.path.join(outputdir, '%s.pot' % TEXT_DOMAIN)
+
+            # We add final_out back on because msgcat will combine all
+            # specified files.  We'll redirect everything back in to
+            # final_out in a minute.
+            pot_files.append(final_out)
+
+            meltingpot = tempfile.TemporaryFile()
             command = ["msgcat"] + pot_files
-            p1 = Popen(command, stdout=z_keys)
+            p1 = Popen(command, stdout=meltingpot)
             p1.communicate()
-            z_keys.close()
+            meltingpot.seek(0)
+
+            # w+ truncates the file first
+            with open(final_out, 'w+') as final:
+                final.write(meltingpot.read())
+
+            meltingpot.close()
+
             for i in [x for x in domains if x not in standalone_domains]:
-                os.remove(os.path.join(root, 'locale', 'z-%s.pot' % i))
+                os.remove(os.path.join(outputdir, '%s.pot' % i))
 
         print 'done'
